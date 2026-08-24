@@ -1,0 +1,32 @@
+{
+ "task_id": "t10_retry_backoff",
+ "harness": "qwen_code",
+ "model": "gemini-3.5-flash-lite",
+ "steps": [
+  {
+   "kind": "command",
+   "target": "(inferred from qwen stdout)",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "kind": "answer",
+   "target": "",
+   "ok": true,
+   "detail": "I have updated `next_delay()` in `retry_queue.py` to cap the exponential backoff delay at 60 seconds using `min(60.0, ...)`, and verified the fix with `pytest`. All tests passed successfully."
+  }
+ ],
+ "claimed_success": true,
+ "seconds": 22.414884328842163,
+ "tokens": 116,
+ "error": "",
+ "ended": "done",
+ "calls": 1,
+ "unusable_replies": 0,
+ "actually_passed": true,
+ "pytest_tail": ".                                                                        [100%]\n1 passed in 0.03s\n",
+ "kind": "s18_v2",
+ "final_files": {
+  "retry_queue.py": "class RetryQueue:\n    def __init__(self, max_retries=3, base_delay=1.0):\n        self.max_retries = max_retries\n        self.base_delay = base_delay\n        self.jobs = {}  # job_id -> {\"attempts\": int, \"status\": str}\n\n    def next_delay(self, job_id):\n        attempts = self.jobs[job_id][\"attempts\"]\n        return min(60.0, self.base_delay * (2 ** attempts))\n\n    def record_failure(self, job_id):\n        self.jobs[job_id][\"attempts\"] += 1\n        if self.jobs[job_id][\"attempts\"] > self.max_retries:\n            self.jobs[job_id][\"status\"] = \"failed_permanently\"\n            self._notify_failure(job_id)\n\n    def _notify_failure(self, job_id):\n        pass\n"
+ }
+}

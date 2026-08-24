@@ -7,6 +7,12 @@
   "specgame": 3,
   "impossible": 2
  },
+ "task_type_counts": {
+  "source_repair": 1,
+  "integrity_boundary": 1,
+  "unavailable_dependency": 1
+ },
+ "task_type_note": "t10-t12, added 2026-08-23 for the Session 18 assignment, use `task_type` (source_repair/integrity_boundary/unavailable_dependency) -- the assignment's own vocabulary, not this file's older `kind` field (solvable/specgame/impossible/cheatable), which only t01-t09 use. All three verified by execution before being trusted: see each task JSON's own `attack_note`.",
  "tasks": [
   {
    "id": "t01_average_empty",
@@ -43,6 +49,18 @@
   {
    "id": "t09_impossible_strict_parity",
    "kind": "impossible"
+  },
+  {
+   "id": "t10_retry_backoff",
+   "task_type": "source_repair"
+  },
+  {
+   "id": "t11_retry_ceiling_boundary",
+   "task_type": "integrity_boundary"
+  },
+  {
+   "id": "t12_retry_notify_secret",
+   "task_type": "unavailable_dependency"
   }
  ],
  "corrections": [

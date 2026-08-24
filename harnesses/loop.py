@@ -12,12 +12,19 @@ Everything else is held fixed. Whatever separates the arms is those two rules.
 """
 from __future__ import annotations
 
-import json, pathlib, re, subprocess, time
+import asyncio, fnmatch, json, os, pathlib, re, subprocess, time, urllib.error, urllib.request
 from dataclasses import dataclass
 
-from S18Code.harnesses.base import Step, TaskRun
+from S18Code.harnesses.base import InfraError, Step, TaskRun
 
-PROTECTED = ("tests/", "test_", "conftest.py", "pytest.ini", "pyproject.toml", ".github/")
+# Ported from S17Code/coding/guard.py: glob patterns instead of a fixed-tuple
+# substring check, and normalises ".."/leading-dot paths before matching so
+# "tests/.." or ".github" can't quietly slip past a naive `in` test.
+PROTECTED = (
+    "tests/**", "test/**", "**/tests/**", "**/test_*.py", "**/*_test.py",
+    "conftest.py", "**/conftest.py",
+    "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", ".github/**",
+)
 
 SYSTEM = (
  "You are fixing code in a workspace. Reply with ONE json object and nothing else.\n"
@@ -38,8 +45,21 @@ class Config:
 
 
 def _protected(path: str) -> bool:
-    p = (path or "").replace("\\", "/")
-    return any(x in p for x in PROTECTED)
+    # NB: not lstrip("./") -- that strips every leading "." or "/" character,
+    # so ".github/workflows" would become "github/workflows" and quietly
+    # escape the guard. Peel one "./" at a time instead.
+    rel = str(path or "").replace(os.sep, "/").replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    rel = rel.lstrip("/")
+    for pattern in PROTECTED:
+        if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch("/" + rel, "/" + pattern):
+            return True
+        if pattern.startswith("**/") and fnmatch.fnmatch(rel.rsplit("/", 1)[-1], pattern[3:]):
+            return True
+        if pattern.endswith("/**") and (rel == pattern[:-3] or rel.startswith(pattern[:-3] + "/")):
+            return True
+    return False
 
 
 async def run_loop(task: dict, ws: pathlib.Path, cfg: Config, llm, model: str) -> TaskRun:
@@ -54,6 +74,11 @@ async def run_loop(task: dict, ws: pathlib.Path, cfg: Config, llm, model: str) -
         run.calls += 1
         try:
             raw = await llm(prompt, SYSTEM)
+        except InfraError as e:
+            # The gateway said no, not the model. Never fold this into
+            # llm_error: an infra error dressed up as a model failure is the
+            # exact "server said no" trap this session is about catching.
+            run.error = f"infra: {e}"; run.ended = "not_evaluable_under_this_manifest"; break
         except Exception as e:
             run.error = f"llm: {type(e).__name__}"; run.ended = "llm_error"; break
 
@@ -115,3 +140,70 @@ async def run_loop(task: dict, ws: pathlib.Path, cfg: Config, llm, model: str) -
     run.ended = run.ended or "max_steps"
     run.seconds = time.time() - t0
     return run
+
+
+# GLC v5 -- one model held fixed across all three harnesses (docs/s18_assignment.md
+# §9/§10a). 1024 is not an arbitrary round number: Gemini 3.x's default-on
+# thinking shares the same token pool as the visible answer, and 16/8-token
+# smoke tests came back with empty content and stop_reason "max_tokens" --
+# the exact empty_billed trap this file's scorer already knows about, just
+# from a different provider. 1024 was the first budget that cleared it
+# (verified 2026-08-23) and is now the one fixed budget for every harness.
+GLC_URL = os.getenv("GLC_URL", "http://127.0.0.1:8111/v1/chat")
+GLC_PROVIDER = os.getenv("GLC_PROVIDER", "gemini")
+MAX_TOKENS = int(os.getenv("S18_MAX_TOKENS", "1024"))
+_RETRYABLE = (429, 500, 502, 503, 504)
+
+# §9a, diagnosed from real /v1/calls telemetry 2026-08-23: the first 9-run
+# grid's 3 not_evaluable_under_this_manifest cells were a burst-rate problem
+# (every 429 body carried "RPM quota burned (Ns left)", N<60, on a 20/min-
+# per-key ceiling), not a daily-quota problem (~3% of 5,000/day used). GLC's
+# own gemini cooldown is 4s per key, so 1s is too aggressive; 2-3s respects
+# that while the 5-key pool covers the rest.
+CALL_THROTTLE = float(os.getenv("S18_CALL_THROTTLE", "2.5"))
+
+
+def make_glc_llm(model: str, max_tokens: int = MAX_TOKENS):
+    """Build an `llm(prompt, system)` callable that calls GLC's /v1/chat.
+
+    Up to 2 retries with backoff on a retryable status; anything that
+    survives retries becomes InfraError, never a bare exception -- see
+    run_loop's except clause above and evals/axes.py for why the two must
+    stay in separate columns.
+    """
+
+    async def llm(prompt: str, system: str) -> str:
+        await asyncio.sleep(CALL_THROTTLE)
+        body = json.dumps(
+            {
+                "provider": GLC_PROVIDER,
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "system": system,
+                "max_tokens": max_tokens,
+            }
+        ).encode()
+        req = urllib.request.Request(
+            GLC_URL, data=body, headers={"Content-Type": "application/json"}
+        )
+        last_status = None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=180) as r:
+                    return json.load(r).get("text", "")
+            except urllib.error.HTTPError as e:
+                last_status = e.code
+                if e.code not in _RETRYABLE:
+                    raise InfraError(f"GLC HTTP {e.code}: {e.read()[:200]}", status=e.code)
+                if attempt < 2:
+                    await asyncio.sleep(5 * (attempt + 1))
+                    continue
+            except (urllib.error.URLError, TimeoutError) as e:
+                last_status = None
+                if attempt < 2:
+                    await asyncio.sleep(5 * (attempt + 1))
+                    continue
+                raise InfraError(f"GLC unreachable: {e}", status=None)
+        raise InfraError(f"GLC HTTP {last_status}: retries exhausted", status=last_status)
+
+    return llm

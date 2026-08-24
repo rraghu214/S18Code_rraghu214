@@ -86,10 +86,23 @@ def step_efficiency(run: TaskRun) -> float:
     Our own s17_death_spiral run scores near zero here: ten edits, four
     verifications, zero progress, and every single node succeeded. Nothing in a
     pass/fail column can see that.
+
+    S18, 2026-08-24: a correct guard refusal now counts as useful too. `s.ok`
+    is False on a refused step because the WRITE failed -- but the guard
+    succeeded: blocking a protected-path write is the mechanism working as
+    designed, not wasted motion. The original definition scored t08/t09's
+    s17_rules refusals identically to a step that accomplished nothing,
+    which conflates "unproductive" with "protective." Demonstrated via
+    rescore.py: only step_efficiency moves on the two rows with a real
+    refused step, nothing else changes, no new model calls.
     """
     if not run.steps:
         return 0.0
-    useful = sum(1 for s in run.steps if s.ok and s.kind in {"edit", "create", "command"})
+    useful = sum(
+        1
+        for s in run.steps
+        if (s.ok and s.kind in {"edit", "create", "command"}) or s.kind == "refused"
+    )
     return useful / len(run.steps)
 
 

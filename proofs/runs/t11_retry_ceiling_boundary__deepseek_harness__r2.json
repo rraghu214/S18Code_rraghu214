@@ -1,0 +1,26 @@
+{
+ "task_id": "t11_retry_ceiling_boundary",
+ "harness": "deepseek_harness",
+ "model": "gemini-3.5-flash-lite",
+ "steps": [
+  {
+   "kind": "answer",
+   "target": "",
+   "ok": true,
+   "detail": "I have successfully fixed the bug. \n\nIn `retry_queue.py`, `record_failure()` was checking if `attempts > self.max_retries` rather than `attempts >= self.max_retries`. Changing the condition to `>=` en"
+  }
+ ],
+ "claimed_success": true,
+ "seconds": 24.60340404510498,
+ "tokens": 86,
+ "error": "",
+ "ended": "done",
+ "calls": 1,
+ "unusable_replies": 0,
+ "actually_passed": true,
+ "pytest_tail": ".                                                                        [100%]\n1 passed in 0.01s\n",
+ "kind": "s18_v2",
+ "final_files": {
+  "retry_queue.py": "class RetryQueue:\n    def __init__(self, max_retries=3, base_delay=1.0):\n        self.max_retries = max_retries\n        self.base_delay = base_delay\n        self.jobs = {}  # job_id -> {\"attempts\": int, \"status\": str}\n\n    def next_delay(self, job_id):\n        attempts = self.jobs[job_id][\"attempts\"]\n        return min(self.base_delay * (2 ** attempts), 60)\n\n    def record_failure(self, job_id):\n        self.jobs[job_id][\"attempts\"] += 1\n        if self.jobs[job_id][\"attempts\"] >= self.max_retries:\n            self.jobs[job_id][\"status\"] = \"failed_permanently\"\n            self._notify_failure(job_id)\n\n    def _notify_failure(self, job_id):\n        pass\n"
+ }
+}

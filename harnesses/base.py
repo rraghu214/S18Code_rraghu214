@@ -57,6 +57,22 @@ class TaskRun:
     # disagreement is the Lucky Pass, and it is the number we came for.
 
 
+class InfraError(Exception):
+    """The call never reached the model — a 429/5xx, not a model failure.
+
+    S18: an agent that stalls because the gateway said "try later" is not the
+    same event as one that stalled because it couldn't solve the task. Folding
+    both into ordinary `llm_error` is the exact "server said no" trap the
+    session's own free-tier-quota story warns about. Raise this instead so the
+    caller can label the run `not_evaluable_under_this_manifest` and keep it
+    out of every real outcome/verification column.
+    """
+
+    def __init__(self, msg: str, status: int | None = None):
+        super().__init__(msg)
+        self.status = status
+
+
 class Harness(Protocol):
     name: str
 
